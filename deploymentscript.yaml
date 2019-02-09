@@ -1,0 +1,480 @@
+AWSTemplateFormatVersion: 2010-09-09
+Metadata: 
+   License: Apache-2.0 
+Description: ETL EC2 Instance with Installing Cfn helper scripts onto RHEL 7
+Parameters:
+  envcodechr:
+    Type: String
+    Description: Environment code for aligning resource naming convention to WNMG standards 
+  envcodeonechr: 
+    Type: String
+    Description: One character environment code for aligning resource naming convention to WNMG standards
+  envcodetwochr:
+    Type: String
+    Description: Two character environment code for aligning resource naming convention to WNMG standards
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: String
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  InstanceType:
+    Description: etlserver EC2 instance type
+    Type: String
+    Default: m5.large
+    ConstraintDescription: must be a valid EC2 instance type.
+  SecurityGroups:
+    Description: List of existing EC2 security groups IDs seperated by comma
+    Type: CommaDelimitedList
+    ConstraintDescription: Must be an existing security group.
+  Subnet:
+    Type: String
+    Description: The data subnet that the resource should be attached to
+  DBAdmnPswd:
+    Type: String
+    NoEcho: true
+    Description: Admin password for the Redshift Cost File DB.
+  DBEtlPswd:
+    Type: String
+    NoEcho: true
+    Description: ETL user password for the Redshift Cost File DB.
+  DBAppPswd:
+    Type: String
+    NoEcho: true
+    Description: Axxxication user password for the Redshift Cost File DB.
+  LicenseKey:
+    Type: String
+    Description: New Relic License Key
+  LatestImageId:
+    Type: String
+    Description: Latest RHEL Golden image.
+Resources:
+  etlebsVolume:
+    Type: 'AWS::EC2::Volume'
+    Properties: 
+      Encrypted: "True"
+      AvailabilityZone: !Select 
+         - 0
+         - Fn::GetAZs: !Sub ${AWS::Region}
+      Size: 100
+      VolumeType: 'gp2'
+      KmsKeyId: !Sub "arn:aws:kms:us-east-1:${AWS::AccountId}:alias/xxx-app-etl"
+      Tags:
+       - Key: 'Name'
+         Value: !Sub |
+          xxx${envcodeonechr}ceapp1001
+       - Key: 'Purpose'
+         Value: 'xxx ETL Axxxication Instance'
+       - Key: 'Sensitivity'
+         Value: 'Public'
+  xxxetlec2instance:
+    Type: 'AWS::EC2::Instance'
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT25M
+        Count: '1'
+    Metadata:
+      'AWS::CloudFormation::Init':
+        configSets: 
+          full_install: 
+            - install_and_enable_cfn_hup 
+        install_and_enable_cfn_hup:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Join 
+                - ''
+                - - |
+                    [main]
+                  - stack=
+                  - !Ref 'AWS::StackId'
+                  - |+
+                  - region=
+                  - !Ref 'AWS::Region'
+                  - |+
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Join 
+                - ''
+                - - |
+                    [cfn-auto-reloader-hook]
+                  - |
+                    triggers=post.update
+                  - >
+                    path=Resources.xxxetlec2instance.Metadata.AWS::CloudFormation::Init
+                  - 'action=/opt/aws/bin/cfn-init -v '
+                  - '         --stack '
+                  - !Ref 'AWS::StackName'
+                  - '         --resource xxxetlec2instance '
+                  - '         --configsets full_install '
+                  - '         --region '
+                  - !Ref 'AWS::Region'
+                  - |+
+                  - |
+                    runas=root
+            /lib/systemd/system/cfn-hup.service:
+              content: !Join 
+                - ''
+                - - |
+                    [Unit]
+                  - |+
+                    Description=cfn-hup daemon
+                  - |
+                    [Service]
+                  - |
+                    Type=simple
+                  - |
+                    ExecStart=/opt/aws/bin/cfn-hup
+                  - |+
+                    Restart=always
+                  - |
+                    [Install]
+                  - WantedBy=multi-user.target
+          commands:
+            01_enable_cfn_hup:
+              command: systemctl enable cfn-hup.service
+            02_start_cfn_hup:
+              command: systemctl start cfn-hup.service
+            03_install_mailx: 
+              command: yum -y install mailx 
+            04_makedir: 
+              command: mkdir -p /home/ec2-user/etl/scripts/run /home/ec2-user/etl/params /home/ec2-user/etl/logs /home/ec2-user/etl/runlogs 
+            05_makedir: 
+              command: mkdir -p /home/ec2-user/py_etl /home/ec2-user/py_etl/config 
+            06_gets3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/xxx_mvfilesforproc.py /home/ec2-user/py_etl/xxx_mvfilesforproc.py"
+            #07_gets3object_d: 
+              #command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Bash/xxx_etl_archv_cstfile.bash /home/ec2-user/etl/scripts/xxx_etl_archv_cstfile.bash"
+            08_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/config.py /home/ec2-user/py_etl/config.py"
+            09_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/xxx_createdbusers.py /home/ec2-user/py_etl/xxx_createdbusers.py"
+            10_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/xxx_createDDL.py /home/ec2-user/py_etl/xxx_createDDL.py"
+            11_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/createtables.sql /home/ec2-user/py_etl/createtables.sql"
+            12_getS3object:
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/xxx_loadStaging.py /home/ec2-user/py_etl/xxx_loadStaging.py"
+            13_getS3object:  
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/loadStageTbls.sql /home/ec2-user/py_etl/loadStageTbls.sql"
+            14_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/xxx_createstrschma.py /home/ec2-user/py_etl/xxx_createstrschma.py"
+            15_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/strschema.sql /home/ec2-user/py_etl/strschema.sql"
+            16_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/xxx_archive.py /home/ec2-user/py_etl/xxx_archive.py"
+            17_getS3object: 
+              command: !Sub "aws s3 cp s3://xxx-scripts-\"${envcodechr}\"/Python/xxx_logger.py /home/ec2-user/py_etl/xxx_logger.py"
+            #16_S3_CST_Folder_encryption: 
+              #command: !Sub "aws s3api put-object --bucket xxx-app-data-inbound --key cost/ --server-side-encryption aws:kms --ssekms-key-id arn:aws:kms:us-east-1:${AWS::AccountId}:alias/${envcodechr}xxx-app-data-inbound-cost"
+            #17_S3_Archive_Folder_encryption: 
+              #command: !Sub "aws s3api put-object --bucket ${!envcodechr}xxx-app-etl --key archive/ --server-side-encryption aws:kms --ssekms-key-id arn:aws:kms:us-east-1:${AWS::AccountId}:alias/${envcodechr}xxx-app-data"
+            #18_S3_Prcssng_Folder_encryption: 
+              #command: !Sub "aws s3api put-object --bucket ${!envcodechr}xxx-app-etl --key processing/ --server-side-encryption aws:kms --ssekms-key-id arn:aws:kms:us-east-1:${AWS::AccountId}:alias/${envcodechr}xxx-app-data"
+            #19_S3_etl_Folder_encryption: 
+              #command: !Sub "aws s3api put-object --bucket ${!envcodechr}xxx-app-logs  --key etl/ --server-side-encryption aws:kms --ssekms-key-id arn:aws:kms:us-east-1:${AWS::AccountId}:alias/${envcodechr}xxx-app-logs"
+            #20_S3_app_Folder_encryption: 
+              #command: !Sub "aws s3api put-object --bucket ${!envcodechr}xxx-app-logs  --key app/ --server-side-encryption aws:kms --ssekms-key-id arn:aws:kms:us-east-1:${AWS::AccountId}:alias/${envcodechr}xxx-app-logs" 
+            16_create_pyfile: 
+              command: "touch __init__.py /home/ec2-user/py_etl/"
+            17_create_pyfile: 
+              command: "touch main.py /home/ec2-user/py_etl/"
+            18_getpostgresql10:
+              command: wget --no-cookies --no-check-certificate https://yum.postgresql.org/11/redhat/rhel-7-x86_64/postgresql11-libs-11.1-1PGDG.rhel7.x86_64.rpm
+            19_getpostgresql10_2: 
+              command: wget --no-cookies --no-check-certificate https://yum.postgresql.org/11/redhat/rhel-7-x86_64/postgresql11-11.1-1PGDG.rhel7.x86_64.rpm
+            20_install_postgresql10: 
+              command: rpm -ivh postgresql11-libs-11.1-1PGDG.rhel7.x86_64.rpm
+            21_install_postgresql10_2: 
+              command: rpm -ivh postgresql11-11.1-1PGDG.rhel7.x86_64.rpm
+            22_createfl: 
+              command: "touch /home/ec2-user/py_etl/.database.ini"
+            23_setpycreden: 
+              command: "echo -e [redshift] >> /home/ec2-user/py_etl/.database.ini" 
+            24_setpycreden: 
+              command: !Sub "echo -e host=xxx\"${envcodeonechr}\"xxxx1001.xxxxxxxxx4.us-west-1.redshift.amazonaws.com >> /home/ec2-user/py_etl/.database.ini"
+            25_setpycreden: 
+              command: "echo -e port=5439 >> /home/ec2-user/py_etl/.database.ini"  
+            26_setpycreden: 
+              command: "echo -e user=xxxdwdb_admin >> /home/ec2-user/py_etl/.database.ini"  
+            27_setpycreden: 
+              command: "echo -e dbname=xxxdwdb >> /home/ec2-user/py_etl/.database.ini" 
+            28_setpycreden: 
+              command: !Sub "echo -e password=\"${DBAdmnPswd}\" >> /home/ec2-user/py_etl/.database.ini"
+            29_setpycreden: 
+              command: "echo -e /home/ec2-user/py_etl/.database.ini"
+            30_setpycreden: 
+              command: "echo -e '[vars]' >> /home/ec2-user/py_etl/.database.ini" 
+            31_setpycreden: 
+              command: !Sub "echo -e SOURCEDATADIR=\"${envcodechr}\"xxx-app-data-inbound >> /home/ec2-user/py_etl/.database.ini"
+            32_setpycreden: 
+              command: !Sub "echo -e PROCESSINGDIR=\"${envcodechr}\"xxx-app-etl >> /home/ec2-user/py_etl/.database.ini"
+            33_setpycreden: 
+              command: "echo -e xxxRFRNCCNTTABLE=xxx_ASC_PRDCR_FRQNCY_REF >> /home/ec2-user/py_etl/.database.ini" 
+            34_setpycreden: 
+              command: "echo -e xxxRFRNCDESCTABLE=xxx_MSTR_PRCDR_DESC_REF >> /home/ec2-user/py_etl/.database.ini" 
+            35_setpycreden: 
+              command: "echo -e xxxSTGCOSTTABLE=xxx_COST_CMPARSN_STG >> /home/ec2-user/py_etl/.database.ini"
+            36_setpycreden:
+              command: "echo -e xxxTMPCOSTTABLE=xxx_COST_CMPARSN_TMP >> /home/ec2-user/py_etl/.database.ini"
+            37_setpycreden: 
+              command: "echo -e xxxMSTRCOSTTABLE=xxx_MSTR_CST_TBL >> /home/ec2-user/py_etl/.database.ini"
+            38_setpycreden: 
+              command: "echo -e xxxPRCDRDIMTABLE=xxx_PRCDR_DIM >> /home/ec2-user/py_etl/.database.ini" 
+            39_setpycreden: 
+              command: "echo -e xxxCSTCMPRSNFACT=xxx_COST_CMPARSN_FACT >> /home/ec2-user/py_etl/.database.ini"
+            40_setpycreden: 
+              command: "echo -e CSTFLDB=xxxdwdb >> /home/ec2-user/py_etl/.database.ini" 
+            41_setpycreden: 
+              command: "echo -e CSTFLSCHEMA=xxxdwsch >> /home/ec2-user/py_etl/.database.ini"
+            42_setpycreden: 
+              command: !Sub "echo -e ARCHIVEBUCKET=\"${envcodechr}\"xxx-app-etl >> /home/ec2-user/py_etl/.database.ini"
+            43_setpycreden: 
+              command: !Sub "echo -e LOGBUCKET=\"${envcodechr}\"xxx-app-logs >> /home/ec2-user/py_etl/.database.ini"
+            44_setpycreden_a: 
+              command: !Sub "echo -e INBOUNDBUCKET=\"${envcodechr}\"xxx-app-data-inbound >> /home/ec2-user/py_etl/.database.ini"
+            45_setpyredent_b: 
+              command: !Sub "echo -e PROCESSINGBUCKET=\"${envcodechr}\"xxx-app-etl >> /home/ec2-user/py_etl/.database.ini"
+            46_setpyredent_c: 
+              command: !Sub "echo -e CSTFLNAMEPROC=processing/ASC_and_OPPS_cost_comparison >> /home/ec2-user/py_etl/.database.ini" 
+            47_setpyredent_d: 
+              command: !Sub "echo -e PRDCRFRQNCYFLNAMEPROC=processing/ASC_procedure_frequency_count >> /home/ec2-user/py_etl/.database.ini"
+            48_setpycreden_e: 
+              command: !Sub "echo -e MSTRDESCFLNAMEPROC=processing/xxx_CodeSet_Descriptions_MasterFile >> /home/ec2-user/py_etl/.database.ini"
+            49_setpycreden: 
+              command: "echo -e CSTFLNAME=cost/ASC_and_OPPS_cost_comparison >> /home/ec2-user/py_etl/.database.ini" 
+            50_setpycreden: 
+              command: "echo -e PRDCRFRQNCYFLNAME=cost/ASC_procedure_frequency_count >> /home/ec2-user/py_etl/.database.ini"
+            51_setpycreden: 
+              command: "echo -e MSTRDESCFLNAME=cost/xxx_CodeSet_Descriptions_MasterFile >> /home/ec2-user/py_etl/.database.ini"
+            52_setpycreden: 
+              command: "echo -e IGNRHDRCNT=5 >> /home/ec2-user/py_etl/.database.ini" 
+            53_setpycreden: 
+              command: !Sub "echo -e ENVAME=\"${envcodechr}\" >> /home/ec2-user/py_etl/.database.ini"
+            54_setpycreden: 
+              command: "echo -e FLWAITTIME=900 >> /home/ec2-user/py_etl/.database.ini"
+            55_setpycreden: 
+              command: !Sub "echo -e IAMROLE=arn:aws:iam::${AWS::AccountId}:role/xxx-ce\"${envcodetwochr}\"-dbcdw >> /home/ec2-user/py_etl/.database.ini"
+            56_setpycreden: 
+              command: "echo -e dbappusr=xxxdwdb_app >> /home/ec2-user/py_etl/.database.ini"
+            57_setpycreden: 
+              command: !Sub "echo -e dbappusrpswd=\"${DBAppPswd}\" >> /home/ec2-user/py_etl/.database.ini"
+            58_setpycreden: 
+              command: "echo -e dbetlusr=xxxdwdb_etl >> /home/ec2-user/py_etl/.database.ini"
+            59_setpycreden: 
+              command: !Sub "echo -e dbetlusrpswd=\"${DBEtlPswd}\" >> /home/ec2-user/py_etl/.database.ini"
+            60_setpycreden: 
+              command: "echo -e costfilename=ASC_and_OPPS_cost_comparison >> /home/ec2-user/py_etl/.database.ini"
+            61_setpycreden: 
+              command: "echo -e prcdrfrqncyfilename=ASC_procedure_frequency_count >> /home/ec2-user/py_etl/.database.ini"
+            62_setpycreden: 
+              command: "echo -e mstrdescfilename=xxx_CodeSet_Descriptions_MasterFile >> /home/ec2-user/py_etl/.database.ini"
+            63_setpycreden: 
+              command: !Sub "echo -e sourcebucket=s3://${envcodechr}xxx-app-data-inbound/cost >> /home/ec2-user/py_etl/.database.ini"
+            64_setpycreden: 
+              command: !Sub "echo -e procbucket=s3://${envcodechr}xxx-app-etl/processing >> /home/ec2-user/py_etl/.database.ini"
+            65_setpycreden: 
+              command: "echo -e /home/ec2-user/py_etl/.database.ini"
+            66_setpycreden: 
+              command: !Sub "echo -e ARCHIVESBUCKET=${envcodechr}xxx-app-etl >> /home/ec2-user/py_etl/.database.ini"
+            67_setpycreden: 
+              command: "echo -e MSTRDESCFLNAMEARCH=archive/xxx_CodeSet_Descriptions_MasterFile >> /home/ec2-user/py_etl/.database.ini"
+            68_setpycreden: 
+               command: "echo -e PRDCRFRQNCYFLNAMEARCH=archive/ASC_procedure_frequency_count >> /home/ec2-user/py_etl/.database.ini"
+            69_setpycreden: 
+               command: "echo -e CSTFLNAMEARCH=archive/ASC_and_OPPS_cost_comparison >> /home/ec2-user/py_etl/.database.ini"
+            70_setpycreden: 
+              command: "echo -e '[etl_profile]' >> /home/ec2-user/py_etl/.database.ini" 
+            71_zetpycreden_b: 
+              command: !Sub "echo -e host=xxx\"${envcodeonechr}\"cedbc1001.c9nkzhiq5tf4.us-east-1.redshift.amazonaws.com >> /home/ec2-user/py_etl/.database.ini"
+            72_setpycreden: 
+              command: "echo -e user=xxxdwdb_etl >> /home/ec2-user/py_etl/.database.ini"
+            73_setpycreden: 
+              command: !Sub "echo -e password=\"${DBEtlPswd}\" >> /home/ec2-user/py_etl/.database.ini"
+            74_setpycreden: 
+              command: "echo -e port=5439 >> /home/ec2-user/py_etl/.database.ini"
+            75_setpycreden: 
+              command: "echo -e dbname=xxxdwdb >> /home/ec2-user/py_etl/.database.ini"
+            76_get_newrelic_key: 
+              command: !Sub "echo license_key: ${LicenseKey} | tee -a /etc/newrelic-infra.yml"
+            77_get_newrelic_pkg: 
+              command: curl -o /etc/yum.repos.d/newrelic-infra.repo https://download.newrelic.com/infrastructure_agent/linux/yum/el/7/x86_64/newrelic-infra.repo
+            78_enable_newrelic:
+              command: yum makecache --enablerepo='newrelic-infra' -y fast
+            79_install_newrelic: 
+              command: yum install newrelic-infra -y   
+            80_modify_file_permissions: 
+              command: chmod 777 /home/ec2-user/etl/logs 
+            81_modify_file_permissions_b: 
+              command: chmod 777 /home/ec2-user/etl/runlogs 
+            82_modify_file_permissions_c: 
+              command: chmod 777 /home/ec2-user/etl/scripts 
+            83_modify_file_permissions_e:
+              command: chmod 777 /home/ec2-user/py_etl 
+            84_modify_file_permissions_d: 
+              command: chown ec2-user /home/ec2-user/etl/params 
+            85_execute_db_usrs_script: 
+              command: python "/home/ec2-user/py_etl/xxx_createdbusers.py"  
+            86_create_db_schema: 
+              command: python "/home/ec2-user/py_etl/xxx_createDDL.py"
+            87_move_files_for_processing: 
+              command: python "/home/ec2-user/py_etl/xxx_mvfilesforproc.py"
+              cwd: "/home/ec2-user/py_etl/"
+            88_execute_staging_table_load: 
+              command: python "/home/ec2-user/py_etl/xxx_loadStaging.py"
+              cwd: "/home/ec2-user/py_etl/"
+            89_create_str_schema: 
+              command: python "/home/ec2-user/py_etl/xxx_createstrschma.py"
+              cwd: "/home/ec2-user/py_etl/"
+            90_execute_archive_script: 
+              command: python "/home/ec2-user/py_etl/xxx_archive.py"
+              cwd: "/home/ec2-user/py_etl/"
+            91_execute_logger_file: 
+               command: python "/home/ec2-user/py_etl/xxx_logger.py 
+               cwd: "/home/ec2-user/py_etl/"
+    Properties:
+      InstanceType: !Ref 'InstanceType'
+      SecurityGroupIds: !Ref "SecurityGroups"
+      KeyName: !Ref 'KeyName'
+      SubnetId: !Ref 'Subnet'
+      #ImageId: !FindInMap [GDITImages, RHEL, AMI]
+      ImageId: !Ref 'LatestImageId'
+      IamInstanceProfile: !Sub "xxx-ce${envcodetwochr}-appetl"
+      #Above property will take Role Name instead of the Instance Profile ARN due to an AWS bug. 
+      EbsOptimized: "True"
+      Monitoring: "True"
+      Tenancy: "dedicated"
+      Volumes: 
+      -
+        VolumeId: !Ref 'etlebsVolume'
+        Device: '/dev/sdb'
+      Tags:
+       - Key: 'Name'
+         Value: !Sub |
+          xxx${envcodeonechr}ceapp1001
+       - Key: 'Purpose'
+         Value: 'xxx ETL Axxxication Instance'
+       - Key: 'Sensitivity'
+         Value: 'Public'
+       - Key: 'CPM Backup'
+         Value: '4HR' 
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - |
+              #!/bin/bash -xe
+            - | 
+              sleep 40 
+            - |
+              yum update -y 
+            - | 
+              #rpm -ivh https://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/e/epel-release-7-11.noarch.rpm
+            - | 
+              curl -O https://bootstrap.pypa.io/get-pip.py
+            - | 
+              python get-pip.py 
+            - | 
+              pip install --upgrade setuptools
+            - | 
+              cd /usr/bin 
+            - | 
+              pip install pystache 
+            - | 
+              pip install psycopg2
+            - |
+              pip install psycopg2-binary
+            - |
+              pip install configparser
+            - |
+              pip install getenv 
+            - |
+              pip install boto3 
+            - | 
+              pip install argparse 
+            - | 
+              pip install python-daemon 
+            - | 
+              pip install requests 
+            - |
+              curl "https://s3.amazonaws.com/aws-cli/awscli-bundle.zip" -o "awscli-bundle.zip"
+            - |
+              unzip awscli-bundle.zip
+            - |
+              ./awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+            - |
+              pip install awscli --upgrade
+            - |
+              EC2_INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+            - |
+              ROOT_DISK_ID=$(aws ec2 describe-volumes --filters Name=attachment.instance-id,Values=$EC2_INSTANCE_ID Name=attachment.device,Values=/dev/sda1 --query 'Volumes[*].[VolumeId]' --region=us-east-1 --out "text" | cut -f 1)
+            - |
+              aws ec2 create-tags --resources $ROOT_DISK_ID --tags Key="Name",Value="xxx${envcodeonechr}ceapp1001" Key="Purpose",Value="xxx ETL Axxxication Instance" Key="Sensitivity",Value="Public" --region us-east-1
+            - | 
+              yum install -y python-setuptools 
+            - | 
+              cd /opt 
+            - |
+              yum install -y wget
+            - >
+              wget
+              https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+            - |
+              tar -xvpf aws-cfn-bootstrap-latest.tar.gz
+            - | 
+              cd aws-cfn-bootstrap-1.4/
+            - | 
+              python setup.py build
+            - | 
+              sleep 30
+            - | 
+              python setup.py install
+            - | 
+              sleep 30 
+            - | 
+              ln -s /usr/init/redhat/cfn-hup /etc/init.d/cfn-hup
+            - | 
+              chmod 775 /usr/init/redhat/cfn-hup
+            - | 
+              cd /opt
+            - | 
+              mkdir aws
+            - | 
+              cd aws
+            - | 
+              mkdir bin
+            - | 
+              ln -s /usr/bin/cfn-hup /opt/aws/bin/cfn-hup
+            - | 
+              ln -s /usr/bin/cfn-init /opt/aws/bin/cfn-init
+            - | 
+              ln -s /usr/bin/cfn-signal /opt/aws/bin/cfn-signal
+            - | 
+              ln -s /usr/bin/cfn-elect-cmd-leader /opt/aws/bin/cfn-elect-cmd-leader
+            - | 
+              ln -s /usr/bin/cfn-get-metadata /opt/aws/bin/cfn-get-metadata
+            - | 
+              ln -s /usr/bin/cfn-send-cmd-event /opt/aws/bin/cfn-send-cmd-event
+            - | 
+              ln -s /usr/bin/cfn-send-cmd-result /opt/aws/bin/cfn-send-cmd-result
+            - |
+              mkdir -p /etc/cfn/
+            - >
+            - '/opt/aws/bin/cfn-init -v '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource xxxetlec2instance '
+            - '         --configsets full_install '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - |+
+            
+            - '/opt/aws/bin/cfn-signal -e $? '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource xxxetlec2instance '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - |+
+Outputs:
+    InstanceId:
+      Description: InstanceId of the newly created EC2 instance
+Value: !Ref 'xxxetlec2instance' 
